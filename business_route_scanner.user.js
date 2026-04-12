@@ -5,8 +5,8 @@
 // @description  Scan routes for business, apartment, and problem stops with duration tracking and difficulty scoring
 // @author       You
 // @match        https://logistics.amazon.com/operations/execution/dv/routes*
-// @downloadURL  https://raw.githubusercontent.com/onth-bot/business-route-scanner/main/business-route-scanner.user.js
-// @updateURL    https://raw.githubusercontent.com/onth-bot/business-route-scanner/main/business-route-scanner.user.js
+// @downloadURL  https://raw.githubusercontent.com/onth-bot/ONTH-Route-Scanner/main/business_route_scanner.user.js
+// @updateURL    https://raw.githubusercontent.com/onth-bot/ONTH-Route-Scanner/main/business_route_scanner.user.js
 // @grant        none
 // ==/UserScript==
 
