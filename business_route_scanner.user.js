@@ -23,17 +23,18 @@
     ],
     APT_KEYWORDS: ["APT","APT.","APT#","UNIT","UNIT#","#","PH","PENTHOUSE"],
     PROBLEM_GROUPS: [
-      { label: "Foxhill Apt's",             patterns: ["941 FOXHILL DR", "979 FOXHILL DR"] },
-      { label: "Saybrook Apt's",            patterns: ["9199 N SAYBROOK", "9263 N SAYBROOK"] },
-      { label: "Nees Apt's",                patterns: ["2610 E NEES AVE"] },
-      { label: "Spruce Apt's",              patterns: ["2389 E SPRUCE AVE", "2060 E SPRUCE AVE"] },
-      { label: "Alluvial Apt's",            patterns: ["2350 E ALLUVIAL AVE"] },
-      { label: "Fort Washington Apt's",     patterns: ["9525 N FORT WASHINGTON"] },
-      { label: "Shepard Apt's (The Row)",   patterns: ["2740 E SHEPARD AVE"] },
-      { label: "Primos",                    patterns: ["PRIMITIVO WAY"] },
-      { label: "Coventry Apt's",            patterns: ["COVENTRY AVE"] },
-      { label: "Old Friant Rd",             patterns: ["OLD FRIANT RD"] },
-      { label: "722 Clovis Apt's",          patterns: ["722 N CLOVIS AVE"] }
+      { label: "Foxhill Apt's",             patterns: ["941 FOXHILL DR", "979 FOXHILL DR"], points: 20 },
+      { label: "Copper And Friant Apt's",   patterns: ["COPPER AND FRIANT", "11217 N ALICANTE DR", "11201 N ALICANTE DR"], points: 20 },
+      { label: "Saybrook Apt's",            patterns: ["9199 N SAYBROOK", "9263 N SAYBROOK"], points: 10 },
+      { label: "Nees Apt's",                patterns: ["2610 E NEES AVE"], points: 10 },
+      { label: "Spruce Apt's",              patterns: ["2389 E SPRUCE AVE", "2060 E SPRUCE AVE"], points: 10 },
+      { label: "Alluvial Apt's",            patterns: ["2350 E ALLUVIAL AVE"], points: 10 },
+      { label: "Fort Washington Apt's",     patterns: ["9525 N FORT WASHINGTON"], points: 15 },
+      { label: "Shepard Apt's (The Row)",   patterns: ["2740 E SHEPARD AVE"], points: 10 },
+      { label: "Primos",                    patterns: ["PRIMITIVO WAY"], points: 20 },
+      { label: "Coventry Apt's",            patterns: ["COVENTRY AVE"], points: 10 },
+      { label: "Old Friant Rd",             patterns: ["OLD FRIANT RD"], points: 5 },
+      { label: "722 Clovis Apt's",          patterns: ["722 N CLOVIS AVE"], points: 15 }
     ],
     STATION_EXCLUDE: ["825 NORTH CLOVIS","825 N CLOVIS","825 N. CLOVIS","825 CLOVIS"],
     TIMEOUTS: { ROUTE_LOAD: 8000, ROUTE_LIST: 5000, SCROLL_DELAY: 40, CLICK_DELAY: 0, POLL_INTERVAL: 0 },
@@ -41,11 +42,9 @@
     MAX_RECURSION_DEPTH: 15,
     MAX_LOG_ENTRIES: 100,
     DIFFICULTY: {
-        FLAGGED_WEIGHT: 0.60,       // 60% from biz/apt %
-        DURATION_WEIGHT: 0.20,      // 20% from route duration vs. daily average
-        DENSITY_WEIGHT: 0.5,        // 50% from stops per hour
-        MULTI_TBA_WEIGHT: 0.10,     // 10% from stops with multiple packages
-        PROBLEM_STOP_BONUS: 5      // 5 points for any problem stops
+        FLAGGED_WEIGHT: 0.50,       // 60% from biz/apt %
+        DURATION_WEIGHT: 0.30,      // 20% from route duration vs. daily average
+        MULTI_TBA_WEIGHT: 0.20      // 20% from stops with multiple packages (Increased since density was removed)
     }
   };
 
@@ -68,7 +67,7 @@
 
   function calcDifficulty(routeStats, dailyAvgDuration) {
     const C = CONFIG.DIFFICULTY;
-    const { flaggedPct, duration, problemStops, totalStops, totalTBAs } = routeStats;
+    const { flaggedPct, duration, problemPoints, totalStops, totalTBAs } = routeStats;
 
     // 1. Flagged Stops Score
     const flaggedScore = Math.min(flaggedPct, 100) * C.FLAGGED_WEIGHT;
@@ -80,26 +79,18 @@
       durationScore = Math.max(0, Math.min((durationRatio - 0.8) / 0.4, 1)) * C.DURATION_WEIGHT * 100;
     }
 
-    // 3. Density Score (Stops per Hour)
-    let densityScore = 0;
-    const hours = duration / 3600;
-    if (totalStops > 0 && hours > 0) {
-        const stopsPerHour = totalStops / hours;
-        densityScore = Math.max(0, Math.min((stopsPerHour - 15) / 20, 1)) * C.DENSITY_WEIGHT * 100;
-    }
-
-    // 4. Multi-TBA Stops Score
+    // 3. Multi-TBA Stops Score
     let multiTbaScore = 0;
     if (totalStops > 0 && totalTBAs > totalStops) {
         const multiTbaRatio = (totalTBAs - totalStops) / totalStops;
         multiTbaScore = Math.max(0, Math.min(multiTbaRatio / 0.5, 1)) * C.MULTI_TBA_WEIGHT * 100;
     }
 
-    // 5. Problem Stop Bonus
-    const problemBonus = (problemStops > 0) ? C.PROBLEM_STOP_BONUS : 0;
+    // 4. Dynamic Problem Stop Bonus
+    const problemBonus = problemPoints || 0;
 
     // Final Score
-    const finalScore = Math.round(flaggedScore + durationScore + densityScore + multiTbaScore + problemBonus);
+    const finalScore = Math.round(flaggedScore + durationScore + multiTbaScore + problemBonus);
     return Math.min(finalScore, 100);
   }
 
@@ -120,7 +111,8 @@
     const n = norm(addr);
     for (const group of CONFIG.PROBLEM_GROUPS) {
       for (const pat of group.patterns) {
-        if (n.includes(pat)) return { label: group.label, pattern: pat };
+        // Return points along with label and pattern
+        if (n.includes(pat)) return { label: group.label, pattern: pat, points: group.points || 0 };
       }
     }
     return null;
@@ -360,7 +352,17 @@
     let totalBiz = 0, totalApt = 0, totalProb = 0, priorityFlags = 0;
 
     for (const c of codes) {
-      stats[c] = { name: routesMap.get(c) || c, business: 0, apt: 0, problem: 0, duration: durations.get(c) || 0, totalTBAs: 0 };
+      // Added seenProblemGroups to track which groups we've already scored
+      stats[c] = {
+        name: routesMap.get(c) || c,
+        business: 0,
+        apt: 0,
+        problem: 0,
+        problemPoints: 0,
+        seenProblemGroups: new Set(),
+        duration: durations.get(c) || 0,
+        totalTBAs: 0
+      };
       stopSets[c] = new Set();
     }
 
@@ -429,7 +431,15 @@
 
         const probMatch = checkProblem(stop.address);
         if (probMatch) {
-          stats[code].problem++; totalProb++;
+          stats[code].problem++;
+
+          // FIX: Only add points ONCE per problem group per route to prevent massive multipliers
+          if (!stats[code].seenProblemGroups.has(probMatch.label)) {
+            stats[code].problemPoints += probMatch.points;
+            stats[code].seenProblemGroups.add(probMatch.label);
+          }
+
+          totalProb++;
           let row = probData.find(r => r.Route === code);
           if (!row) {
             row = { Route: code, Driver: driver, ProblemStops: 0, ProblemTBAs: 0, ProblemLabels: new Set() };
@@ -519,6 +529,7 @@
             flaggedPct: flaggedPct,
             duration: s.duration,
             problemStops: s.problem,
+            problemPoints: s.problemPoints, // Passing dynamic points to calculator
             totalStops: totalStops,
             totalTBAs: s.totalTBAs
         };
