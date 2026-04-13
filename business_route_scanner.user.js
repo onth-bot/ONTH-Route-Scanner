@@ -29,7 +29,7 @@
       { label: "Foxhill Apt's",             patterns: ["941 FOXHILL DR", "979 FOXHILL DR"] },
       { label: "Saybrook Apt's",             patterns: ["9199 N SAYBROOK", "9263 N SAYBROOK"] },
       { label: "Nees Apt's",        patterns: ["2610 E NEES AVE"] },
-      { label: "Spruce",           patterns: ["2389 E SPRUCE AVE", "2060 E SPRUCE AVE"] },
+      { label: "Spruce Apt's",           patterns: ["2389 E SPRUCE AVE", "2060 E SPRUCE AVE"] },
       { label: "Alluvial Apt's",    patterns: ["2350 E ALLUVIAL AVE"] },
       { label: "Fort Washington Apt's", patterns: ["9525 N FORT WASHINGTON"] },
       { label: "Shepard Apt's (The Row)",     patterns: ["2740 E SHEPARD AVE"] },
