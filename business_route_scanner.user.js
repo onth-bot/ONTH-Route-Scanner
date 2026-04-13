@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         Business Route Scanner - Enhanced
+// @name         Business Route Scanner - Enhanced (Max Speed)
 // @namespace    http://tampermonkey.net/
-// @version      2.5.3
-// @description  Scan routes for business, apartment, and problem stops with duration tracking and difficulty scoring
-// @author       You
+// @version      2.9.0
+// @description  Scan routes for business, apartment, and problem stops with a dynamic difficulty score. Optimized for absolute maximum speed.
+// @author       You & Copilot
 // @match        https://logistics.amazon.com/operations/execution/dv/routes*
 // @downloadURL  https://raw.githubusercontent.com/onth-bot/ONTH-Route-Scanner/main/business_route_scanner.user.js
 // @updateURL    https://raw.githubusercontent.com/onth-bot/ONTH-Route-Scanner/main/business_route_scanner.user.js
@@ -14,7 +14,7 @@
   'use strict';
 
   const CONFIG = {
-    VERSION: '2.5.3',
+    VERSION: '2.9.0',
     BUSINESS_KEYWORDS: [
       "SUITE","STE","STE.","STE#","BLDG","BUILDING","FLOOR","FL ",
       "OFFICE","ROOM","DEPT","DEPARTMENT","LLC","INC","CORP","LTD",
@@ -22,9 +22,6 @@
       "DENTAL","BANK","HOTEL","MOTEL","INN"
     ],
     APT_KEYWORDS: ["APT","APT.","APT#","UNIT","UNIT#","#","PH","PENTHOUSE"],
-    // label  = what shows in CSV "Problem Group" column
-    // patterns = address substrings to match (uppercased)
-    // Put addresses in the same group to combine them under one label
     PROBLEM_GROUPS: [
       { label: "Foxhill Apt's",             patterns: ["941 FOXHILL DR", "979 FOXHILL DR"] },
       { label: "Saybrook Apt's",             patterns: ["9199 N SAYBROOK", "9263 N SAYBROOK"] },
@@ -32,29 +29,30 @@
       { label: "Spruce Apt's",           patterns: ["2389 E SPRUCE AVE", "2060 E SPRUCE AVE"] },
       { label: "Alluvial Apt's",    patterns: ["2350 E ALLUVIAL AVE"] },
       { label: "Fort Washington Apt's", patterns: ["9525 N FORT WASHINGTON"] },
-      { label: "Shepard Apt's (The Row)",     patterns: ["2740 E SHEPARD AVE"] },
+      { label: "Shepard Apt's (The Row)",      patterns: ["2740 E SHEPARD AVE"] },
       { label: "Primos",          patterns: ["PRIMITIVO WAY"] },
-      { label: "Coventry Apt's",           patterns: ["COVENTRY AVE"] },
+      { label: "Coventry Apt's",            patterns: ["COVENTRY AVE"] },
       { label: "Old Friant Rd",          patterns: ["OLD FRIANT RD"] },
       { label: "722 Clovis Apt's",          patterns: ["722 N CLOVIS AVE"] }
-
     ],
     STATION_EXCLUDE: ["825 NORTH CLOVIS","825 N CLOVIS","825 N. CLOVIS","825 CLOVIS"],
-    TIMEOUTS: { ROUTE_LOAD: 8000, ROUTE_LIST: 5000, SCROLL_DELAY: 150, CLICK_DELAY: 100, POLL_INTERVAL: 80 },
-    SCROLL: { INCREMENT: 600, MAX_ATTEMPTS: 50 },
+    TIMEOUTS: { ROUTE_LOAD: 8000, ROUTE_LIST: 5000, SCROLL_DELAY: 40, CLICK_DELAY: 0, POLL_INTERVAL: 0 },
+    SCROLL: { INCREMENT: 800, MAX_ATTEMPTS: 50 },
     MAX_RECURSION_DEPTH: 15,
     MAX_LOG_ENTRIES: 100,
     DIFFICULTY: {
-        FLAGGED_WEIGHT: 0.65,
-        DURATION_WEIGHT: 0.35,
-        PROBLEM_STOP_BONUS: 5, // Adds 5% to difficulty if any problem stops exist
-        BASELINE_DURATION: 25200
+        FLAGGED_WEIGHT: 0.60,       // 60% from biz/apt %
+        DURATION_WEIGHT: 0.20,      // 20% from route duration vs. daily average
+        DENSITY_WEIGHT: 0.5,       // 50% from stops per hour
+        MULTI_TBA_WEIGHT: 0.10,     // 10% from stops with multiple packages
+        PROBLEM_STOP_BONUS: 5      // 5 points for any problem stops
     }
   };
 
   /* ── Utilities ────────────────────────────────────────────────────────── */
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const yieldFrame = () => new Promise(r => requestAnimationFrame(r));
   const norm = s => String(s || "").toUpperCase().trim().replace(/\./g, "");
 
   const sanitizeCSV = s => {
@@ -68,20 +66,54 @@
     return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
   };
 
-  function calcDifficulty(flagPct, durSec, problemStopCount) {
-    const f = Math.min(flagPct, 100) * CONFIG.DIFFICULTY.FLAGGED_WEIGHT;
-    const d = Math.min((durSec / CONFIG.DIFFICULTY.BASELINE_DURATION) * 100, 200) * CONFIG.DIFFICULTY.DURATION_WEIGHT;
-    const problemBonus = (problemStopCount > 0) ? CONFIG.DIFFICULTY.PROBLEM_STOP_BONUS : 0;
-    return Math.min(Math.round(f + d + problemBonus), 100);
+  function calcDifficulty(routeStats, dailyAvgDuration) {
+    const C = CONFIG.DIFFICULTY;
+    const { flaggedPct, duration, problemStops, totalStops, totalTBAs } = routeStats;
+
+    // 1. Flagged Stops Score
+    const flaggedScore = Math.min(flaggedPct, 100) * C.FLAGGED_WEIGHT;
+
+    // 2. Duration Score - Relative to the daily average
+    let durationScore = 0;
+    if (duration > 0 && dailyAvgDuration > 0) {
+      const durationRatio = duration / dailyAvgDuration;
+      durationScore = Math.max(0, Math.min((durationRatio - 0.8) / 0.4, 1)) * C.DURATION_WEIGHT * 100;
+    }
+
+    // 3. Density Score (Stops per Hour)
+    let densityScore = 0;
+    const hours = duration / 3600;
+    if (totalStops > 0 && hours > 0) {
+        const stopsPerHour = totalStops / hours;
+        densityScore = Math.max(0, Math.min((stopsPerHour - 15) / 20, 1)) * C.DENSITY_WEIGHT * 100;
+    }
+
+    // 4. Multi-TBA Stops Score
+    let multiTbaScore = 0;
+    if (totalStops > 0 && totalTBAs > totalStops) {
+        const multiTbaRatio = (totalTBAs - totalStops) / totalStops;
+        multiTbaScore = Math.max(0, Math.min(multiTbaRatio / 0.5, 1)) * C.MULTI_TBA_WEIGHT * 100;
+    }
+
+    // 5. Problem Stop Bonus
+    const problemBonus = (problemStops > 0) ? C.PROBLEM_STOP_BONUS : 0;
+
+    // Final Score
+    const finalScore = Math.round(flaggedScore + durationScore + densityScore + multiTbaScore + problemBonus);
+    return Math.min(finalScore, 100);
   }
 
-  async function waitFor(pred, timeout = 5000, interval = 100) {
+  // MAX SPEED WAIT FUNCTION - Taps directly into browser render loop
+  async function waitFor(pred, timeout = 5000) {
     const t0 = Date.now();
-    while (Date.now() - t0 < timeout) {
-      try { if (pred()) return true; } catch(e) {}
-      await sleep(interval);
-    }
-    return false;
+    return new Promise(resolve => {
+      function check() {
+        try { if (pred()) return resolve(true); } catch(e) {}
+        if (Date.now() - t0 >= timeout) return resolve(false);
+        requestAnimationFrame(check);
+      }
+      check();
+    });
   }
 
   function checkProblem(addr) {
@@ -109,7 +141,7 @@
     return null;
   }
 
-  /* ── React fiber helpers ────────────────────────────────���─────────────── */
+  /* ── React fiber helpers ─────────────────────────────────────────────── */
 
   function getFiber(el) {
     const k = Object.keys(el).find(k => k.startsWith('__reactFiber') || k.startsWith('__reactProps'));
@@ -220,7 +252,6 @@
   }
 
   /* ── DOM helpers ──────────────────────────────────────────────────────── */
-
   const STOP_SEL = 'div[class*="stop"], div[class*="card"], div[class*="task"], div[data-index]';
 
   function findScroller() {
@@ -243,6 +274,43 @@
     }
     return false;
   }
+
+  // --- Turbo Mode ---
+  const TURBO_STYLE_ID = 'brs-turbo-styles';
+  let originalSheetStates = [];
+
+  function toggleTurboMode(enable, log) {
+    if (enable) {
+      log('Entering Turbo Mode: Disabling styles and rendering.', 'warning');
+      originalSheetStates = [];
+      for (const sheet of document.styleSheets) {
+        originalSheetStates.push({ sheet, disabled: sheet.disabled });
+        sheet.disabled = true;
+      }
+      let style = document.getElementById(TURBO_STYLE_ID);
+      if (!style) {
+        style = document.createElement('style');
+        style.id = TURBO_STYLE_ID;
+        style.textContent = `
+          body > *:not(#business-scanner-panel) {
+            visibility: hidden !important;
+            animation: none !important;
+            transition: none !important;
+          }
+        `;
+        document.head.appendChild(style);
+      }
+    } else {
+      log('Exiting Turbo Mode: Restoring styles.', 'info');
+      const style = document.getElementById(TURBO_STYLE_ID);
+      if (style) style.remove();
+      for (const state of originalSheetStates) {
+        state.sheet.disabled = state.disabled;
+      }
+      originalSheetStates = [];
+    }
+  }
+
 
   /* ── Data collection ──────────────────────────────────────────────────── */
 
@@ -273,7 +341,7 @@
     const routes = new Map(), durations = new Map();
     const scr = findScroller();
     if (scr) scr.scrollTop = 0;
-    await sleep(200);
+    await yieldFrame();
 
     let sameCount = 0, prevSize = 0;
     for (let i = 0; i < CONFIG.SCROLL.MAX_ATTEMPTS; i++) {
@@ -317,19 +385,21 @@
 
   /* ── Main scraper ─────────────────────────────────────────────────────── */
 
-  async function runScraper(log, shouldStop, onlyRemaining, updateProgress, updateStats) {
+  async function runScraper(log, shouldStop, onlyRemaining, updateProgress, updateStats, turboMode) {
     const label = onlyRemaining ? "REMAINING" : "ALL";
     const { routes: routesMap, durations } = await getAllRoutes(log);
     const codes = [...routesMap.keys()];
 
     if (!codes.length) { log('No routes found! Make sure you are on the route list page.', 'error'); return; }
 
+    if (turboMode) toggleTurboMode(true, log);
+
     const bizData = [], aptData = [], probData = [];
     const stats = {}, stopSets = {};
     let totalBiz = 0, totalApt = 0, totalProb = 0, priorityFlags = 0;
 
     for (const c of codes) {
-      stats[c] = { name: routesMap.get(c) || c, business: 0, apt: 0, problem: 0, duration: durations.get(c) || 0 };
+      stats[c] = { name: routesMap.get(c) || c, business: 0, apt: 0, problem: 0, duration: durations.get(c) || 0, totalTBAs: 0 };
       stopSets[c] = new Set();
     }
 
@@ -342,25 +412,47 @@
       log(`[${i+1}/${codes.length}] ${code} (${driver})`, 'info');
       updateProgress(i, codes.length);
 
-      const scr = findScroller();
-      if (scr) scr.scrollTop = 0;
-
-      let found = false;
-      for (let sa = 0; sa < 30 && !found; sa++) {
+      const clickRoute = () => {
         for (const p of document.querySelectorAll(`p[title="${code}"]`)) {
           const lnk = p.closest('a.af-link');
-          if (lnk) { lnk.click(); found = true; break; }
+          if (lnk) { lnk.click(); return true; }
         }
-        if (!found) { scr ? (scr.scrollTop += CONFIG.SCROLL.INCREMENT) : window.scrollBy(0, CONFIG.SCROLL.INCREMENT); await sleep(50); }
+        return false;
+      };
+
+      // 1. INSTANT CHECK: If the UI remembered our scroll state, click immediately (0 delay).
+      let found = clickRoute();
+
+      // 2. SHORT SCROLL: If not currently rendered, we're probably right above it. Nudge down.
+      if (!found) {
+        const scr = findScroller();
+        for (let sa = 0; sa < 5 && !found; sa++) {
+          scr ? (scr.scrollTop += CONFIG.SCROLL.INCREMENT) : window.scrollBy(0, CONFIG.SCROLL.INCREMENT);
+          await yieldFrame();
+          found = clickRoute();
+        }
+
+        // 3. FAILSAFE: Only if completely lost do we reset to top and scan down.
+        if (!found) {
+          if (scr) scr.scrollTop = 0; else window.scrollTo(0, 0);
+          await yieldFrame();
+          for (let sa = 0; sa < 30 && !found; sa++) {
+            found = clickRoute();
+            if (!found) {
+               scr ? (scr.scrollTop += CONFIG.SCROLL.INCREMENT) : window.scrollBy(0, CONFIG.SCROLL.INCREMENT);
+               await yieldFrame();
+            }
+          }
+        }
       }
+
       if (!found) { log(`Could not find route ${code}`, 'warning'); continue; }
 
-      if (!await waitFor(isRouteDetail, CONFIG.TIMEOUTS.ROUTE_LOAD, CONFIG.TIMEOUTS.POLL_INTERVAL)) {
-        log(`Timeout loading route ${code}`, 'warning'); window.history.back(); await sleep(500); continue;
+      // Maximum speed yield. No arbitrary sleep attached.
+      if (!await waitFor(isRouteDetail, CONFIG.TIMEOUTS.ROUTE_LOAD)) {
+        log(`Timeout loading route ${code}`, 'warning'); window.history.back(); await yieldFrame(); continue;
       }
-      await sleep(200);
 
-      // Try duration from detail page
       if (!stats[code].duration) {
         for (const el of document.querySelectorAll('div, section, main')) {
           const f = getFiber(el);
@@ -369,6 +461,7 @@
       }
 
       for (const stop of getAllStops(log)) {
+        stats[code].totalTBAs += stop.tbaCount;
         if (onlyRemaining && stop.isDelivered) continue;
         stopSets[code].add(stop.seqNum);
         if (stop.hasPriorityFlag) priorityFlags++;
@@ -376,8 +469,6 @@
         const probMatch = checkProblem(stop.address);
         if (probMatch) {
           stats[code].problem++; totalProb++;
-
-          // Aggregate per-route totals for the Problem section (instead of listing each stop)
           let row = probData.find(r => r.Route === code);
           if (!row) {
             row = { Route: code, Driver: driver, ProblemStops: 0, ProblemTBAs: 0, ProblemLabels: new Set() };
@@ -385,8 +476,6 @@
           }
           row.ProblemStops += 1;
           row.ProblemTBAs += (stop.tbaCount || 0);
-
-          // Collect the label(s) hit on this route
           row.ProblemLabels.add(probMatch.label);
         }
 
@@ -410,9 +499,11 @@
 
       const back = document.querySelector('button[aria-label="Back"]');
       back ? back.click() : window.history.back();
-      await waitFor(isRouteList, CONFIG.TIMEOUTS.ROUTE_LIST, CONFIG.TIMEOUTS.POLL_INTERVAL);
-      await sleep(CONFIG.TIMEOUTS.CLICK_DELAY);
+      // Maximum speed yield to wait for route list render
+      await waitFor(isRouteList, CONFIG.TIMEOUTS.ROUTE_LIST);
     }
+
+    if (turboMode) toggleTurboMode(false, log);
 
     updateProgress(codes.length, codes.length);
     log(`Scan complete! PriorityFlags: ${priorityFlags} | Problem stops: ${totalProb}`, 'success');
@@ -438,9 +529,9 @@
       ['Business Stops','','','','','','','Apartment Stops','','','','','','','Problem Stops','','','','','','',
        'Route Summary','','','','','','','','','','','Team Summary','','','Problem Summary',''].join(','),
       ['Route','Driver','Stop','Address','Keyword','TBAs','','Route','Driver','Stop','Address','Keyword','TBAs','',
- 'Route','Driver','Problem Flagged','Problem Stops','Problem TBAs','','',
- 'Route','Driver',hdr,'Business Stops','Apt Stops','Problem Stops','Total Flagged','Flagged %','Duration','Difficulty %','',
- 'Metric','Value',''].join(',')
+       'Route','Driver','Problem Flagged','Problem Stops','Problem TBAs','','',
+       'Route','Driver',hdr,'Business Stops','Apt Stops','Problem Stops','Total Flagged','Flagged %','Duration','Difficulty %','',
+       'Metric','Value',''].join(',')
     ];
 
     const teamSummary = [[hdr,tStops],['Business Stops',tBiz],['Apt Stops',tApt],
@@ -449,6 +540,36 @@
     const maxR = Math.max(bizList.length, aptList.length, probList.length, keys.length, teamSummary.length);
     const csv = s => sanitizeCSV(s);
     const empty6 = () => ['','','','','',''];
+
+    const routesWithDuration = keys.map(k => stats[k].duration).filter(d => d > 0);
+    const dailyAvgDuration = routesWithDuration.length > 0
+      ? routesWithDuration.reduce((sum, d) => sum + d, 0) / routesWithDuration.length
+      : 0;
+
+    if (dailyAvgDuration > 0) {
+      log(`Calculated daily average duration: ${formatDuration(dailyAvgDuration)}`, 'info');
+    }
+
+    const summaryRows = keys.map(k => {
+        const s = stats[k];
+        const totalStops = (stopSets[k] && stopSets[k].size) || 0;
+        const flaggedStops = s.business + s.apt;
+        const flaggedPct = totalStops > 0 ? (flaggedStops / totalStops) * 100 : 0;
+
+        const routeStats = {
+            flaggedPct: flaggedPct,
+            duration: s.duration,
+            problemStops: s.problem,
+            totalStops: totalStops,
+            totalTBAs: s.totalTBAs
+        };
+        const difficulty = calcDifficulty(routeStats, dailyAvgDuration);
+
+        return [
+            csv(k), csv(s.name), totalStops, s.business, s.apt, s.problem,
+            flaggedStops, flaggedPct.toFixed(1) + '%', formatDuration(s.duration), difficulty + '%'
+        ];
+    });
 
     for (let i = 0; i < maxR; i++) {
       const r = [];
@@ -463,20 +584,18 @@
       // Problem (per-route totals)
       if (i < probList.length) {
         const p = probList[i];
-        const labels = p.ProblemLabels
-          ? Array.from(p.ProblemLabels).sort().join('; ')
-          : '';
+        const labels = p.ProblemLabels ? Array.from(p.ProblemLabels).sort().join('; ') : '';
         r.push(csv(p.Route), csv(p.Driver), csv(labels), p.ProblemStops, p.ProblemTBAs, '');
       } else {
         r.push(...empty6());
       }
       r.push('');
       // Route summary
-      if (i < keys.length) {
-        const k = keys[i], s = stats[k], ts = (stopSets[k] && stopSets[k].size) || 0;
-        const fl = s.business + s.apt, fp = ts > 0 ? (fl/ts)*100 : 0;
-        r.push(csv(k),csv(s.name),ts,s.business,s.apt,s.problem,fl,fp.toFixed(1)+'%',formatDuration(s.duration),calcDifficulty(fp,s.duration, s.problem)+'%');
-      } else r.push('','','','','','','','','','');
+      if (i < summaryRows.length) {
+          r.push(...summaryRows[i]);
+      } else {
+          r.push('','','','','','','','','','');
+      }
       r.push('');
       // Team summary
       r.push(...(i < teamSummary.length ? teamSummary[i] : ['','']));
@@ -542,6 +661,14 @@
 .brs-stop-btn{flex:1;padding:8px 12px;background:rgba(24,25,29,.55);border:1px solid var(--border);border-radius:7px;color:var(--txt2);font-family:'Inter',sans-serif;font-weight:600;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;transition:all .15s}
 .brs-stop-btn:hover:not(:disabled){background:rgba(240,160,160,.1);border-color:rgba(240,160,160,.4);color:var(--err);transform:translateY(-1px)}
 .brs-stop-btn:disabled{opacity:.35;cursor:not-allowed}
+.brs-options{padding-top:4px;display:flex;align-items:center;justify-content:center;}
+.brs-switch-label{display:flex;align-items:center;cursor:pointer;gap:6px;font-size:11px;font-weight:500;color:var(--muted);transition:color .15s}.brs-switch-label:hover{color:var(--txt2)}
+.brs-switch{position:relative;display:inline-block;width:26px;height:15px}
+.brs-switch input{opacity:0;width:0;height:0}
+.brs-slider{position:absolute;cursor:pointer;inset:0;background-color:rgba(245,197,24,.18);border-radius:99px;transition:.3s}
+.brs-slider:before{position:absolute;content:"";height:11px;width:11px;left:2px;bottom:2px;background-color:var(--txt2);border-radius:50%;transition:.3s}
+input:checked+.brs-slider{background-color:var(--gold)}
+input:checked+.brs-slider:before{transform:translateX(11px);background-color:var(--bg)}
 .brs-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:8px 14px 12px}
 .brs-stat{background:rgba(24,25,29,.45);border:1px solid rgba(42,44,49,.85);border-radius:8px;padding:10px 6px;text-align:center;transition:all .15s}
 .brs-stat:hover{background:rgba(24,25,29,.62);border-color:rgba(245,197,24,.22);transform:translateY(-1px);box-shadow:0 10px 24px rgba(0,0,0,.35)}
@@ -586,7 +713,19 @@
     <button id="brs-scan-all" class="brs-btn brs-bp"><span>⚡</span><span>Scan All</span></button>
     <button id="brs-scan-rem" class="brs-btn brs-bs"><span>🔍</span><span>Remaining</span></button>
   </div>
-  <div style="display:flex;gap:8px"><button id="brs-stop" class="brs-stop-btn" disabled><span>◼</span><span>Stop Scan</span></button></div>
+  <div style="display:flex;gap:8px">
+    <button id="brs-stop" class="brs-stop-btn" disabled><span>◼</span><span>Stop Scan</span></button>
+  </div>
+  <div class="brs-options">
+      <label class="brs-switch-label" for="brs-turbo" title="Disables all rendering during scan for maximum speed. The page will go blank.">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg>
+        <span>Turbo Mode</span>
+        <label class="brs-switch">
+          <input type="checkbox" id="brs-turbo" checked>
+          <span class="brs-slider"></span>
+        </label>
+      </label>
+  </div>
 </div>
 <div class="brs-stats">
   <div class="brs-stat business"><div class="brs-sv" id="s-biz">0</div><div class="brs-sl">Business</div></div>
@@ -609,6 +748,7 @@
     const scanAll = $('brs-scan-all'), scanRem = $('brs-scan-rem'), stopBtn = $('brs-stop');
     const logEl = $('brs-log'), dot = $('brs-dot'), stxt = $('brs-stxt'), mode = $('brs-mode');
     const psec = $('brs-psec'), pfill = $('brs-pfill'), ptxt = $('brs-ptxt');
+    const turboCheck = $('brs-turbo');
 
     const setStatus = (s, t, m) => { dot.className = 'brs-si ' + s; stxt.textContent = t; mode.textContent = m; };
 
@@ -629,8 +769,7 @@
 
     $('brs-lclear').onclick = () => { logEl.innerHTML = ''; addLog('Log cleared'); };
     addLog('Scanner initialized v' + CONFIG.VERSION, 'success');
-    var totalPatterns = 0;
-    for (var gi = 0; gi < CONFIG.PROBLEM_GROUPS.length; gi++) { totalPatterns += CONFIG.PROBLEM_GROUPS[gi].patterns.length; }
+    var totalPatterns = CONFIG.PROBLEM_GROUPS.reduce((sum, group) => sum + group.patterns.length, 0);
     addLog('Tracking ' + totalPatterns + ' problem addresses in ' + CONFIG.PROBLEM_GROUPS.length + ' groups');
 
     let running = false;
@@ -640,12 +779,16 @@
       if (running) return;
       running = true; state.stopRequested = false;
       scanAll.disabled = scanRem.disabled = true; stopBtn.disabled = false;
+      const useTurbo = turboCheck.checked;
       setStatus('running', 'Scanning in progress...', remaining ? 'Remaining' : 'Full Scan');
       addLog(remaining ? 'Starting remaining stops scan...' : 'Starting full route scan...');
       updateStats(0,0,0,0);
-      try { await runScraper(addLog, () => state.stopRequested, remaining, setProgress, updateStats); }
-      catch (e) { addLog(`Error: ${e.message}`, 'error'); console.error('Scanner error:', e); setStatus('error','Scan failed','Error'); }
-      finally {
+      try {
+        await runScraper(addLog, () => state.stopRequested, remaining, setProgress, updateStats, useTurbo);
+      } catch (e) {
+        addLog(`Error: ${e.message}`, 'error'); console.error('Scanner error:', e); setStatus('error','Scan failed','Error');
+      } finally {
+        if (useTurbo) toggleTurboMode(false, addLog);
         running = false;
         scanAll.disabled = scanRem.disabled = false;
         stopBtn.disabled = true;
