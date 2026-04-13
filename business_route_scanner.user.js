@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Business Route Scanner - Enhanced
 // @namespace    http://tampermonkey.net/
-// @version      2.5.2
+// @version      2.5.3
 // @description  Scan routes for business, apartment, and problem stops with duration tracking and difficulty scoring
 // @author       You
 // @match        https://logistics.amazon.com/operations/execution/dv/routes*
@@ -14,7 +14,7 @@
   'use strict';
 
   const CONFIG = {
-    VERSION: '2.5.2',
+    VERSION: '2.5.3',
     BUSINESS_KEYWORDS: [
       "SUITE","STE","STE.","STE#","BLDG","BUILDING","FLOOR","FL ",
       "OFFICE","ROOM","DEPT","DEPARTMENT","LLC","INC","CORP","LTD",
@@ -36,11 +36,7 @@
       { label: "Primos",          patterns: ["PRIMITIVO WAY"] },
       { label: "Coventry Apt's",           patterns: ["COVENTRY AVE"] },
       { label: "Old Friant Rd",          patterns: ["OLD FRIANT RD"] },
-      { label: "722 Clovis Apt's",          patterns: ["722 N CLOVIS AVE"] },
-      { label: "Copper And Friant Apt's",          patterns: ["COPPER AND FRIANT","11201 N ALICANTE DR","11213 N ALICANTE DR","11237 N ALICANTE DR"] }
-
-
-
+      { label: "722 Clovis Apt's",          patterns: ["722 N CLOVIS AVE"] }
 
     ],
     STATION_EXCLUDE: ["825 NORTH CLOVIS","825 N CLOVIS","825 N. CLOVIS","825 CLOVIS"],
@@ -48,7 +44,12 @@
     SCROLL: { INCREMENT: 600, MAX_ATTEMPTS: 50 },
     MAX_RECURSION_DEPTH: 15,
     MAX_LOG_ENTRIES: 100,
-    DIFFICULTY: { FLAGGED_WEIGHT: 0.65, DURATION_WEIGHT: 0.35, BASELINE_DURATION: 25200 }
+    DIFFICULTY: {
+        FLAGGED_WEIGHT: 0.65,
+        DURATION_WEIGHT: 0.35,
+        PROBLEM_STOP_BONUS: 5, // Adds 5% to difficulty if any problem stops exist
+        BASELINE_DURATION: 25200
+    }
   };
 
   /* ── Utilities ────────────────────────────────────────────────────────── */
@@ -67,10 +68,11 @@
     return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
   };
 
-  function calcDifficulty(flagPct, durSec) {
+  function calcDifficulty(flagPct, durSec, problemStopCount) {
     const f = Math.min(flagPct, 100) * CONFIG.DIFFICULTY.FLAGGED_WEIGHT;
     const d = Math.min((durSec / CONFIG.DIFFICULTY.BASELINE_DURATION) * 100, 200) * CONFIG.DIFFICULTY.DURATION_WEIGHT;
-    return Math.min(Math.round(f + d), 100);
+    const problemBonus = (problemStopCount > 0) ? CONFIG.DIFFICULTY.PROBLEM_STOP_BONUS : 0;
+    return Math.min(Math.round(f + d + problemBonus), 100);
   }
 
   async function waitFor(pred, timeout = 5000, interval = 100) {
@@ -107,7 +109,7 @@
     return null;
   }
 
-  /* ── React fiber helpers ──────────────────────────────────────────────── */
+  /* ── React fiber helpers ────────────────────────────────���─────────────── */
 
   function getFiber(el) {
     const k = Object.keys(el).find(k => k.startsWith('__reactFiber') || k.startsWith('__reactProps'));
@@ -458,7 +460,6 @@
       if (i < aptList.length) { const a = aptList[i]; r.push(csv(a.Route),csv(a.Driver),csv(a.Stop),csv(a.Address),csv(a.Keyword),a.TBAs); }
       else r.push(...empty6());
       r.push('');
-      // Problem
       // Problem (per-route totals)
       if (i < probList.length) {
         const p = probList[i];
@@ -474,7 +475,7 @@
       if (i < keys.length) {
         const k = keys[i], s = stats[k], ts = (stopSets[k] && stopSets[k].size) || 0;
         const fl = s.business + s.apt, fp = ts > 0 ? (fl/ts)*100 : 0;
-        r.push(csv(k),csv(s.name),ts,s.business,s.apt,s.problem,fl,fp.toFixed(1)+'%',formatDuration(s.duration),calcDifficulty(fp,s.duration)+'%');
+        r.push(csv(k),csv(s.name),ts,s.business,s.apt,s.problem,fl,fp.toFixed(1)+'%',formatDuration(s.duration),calcDifficulty(fp,s.duration, s.problem)+'%');
       } else r.push('','','','','','','','','','');
       r.push('');
       // Team summary
@@ -650,9 +651,9 @@
         stopBtn.disabled = true;
         setProgress(0,0);
         if (!state.stopRequested) {
-          setStatus('ready','Scan complete','Standby');
+            setStatus('ready', 'Scan complete', 'Standby');
         } else {
-          setStatus('ready', 'Scan stopped', 'Standby');
+            setStatus('ready', 'Scan stopped', 'Standby');
         }
       }
     }
@@ -670,7 +671,8 @@
       e.stopPropagation();
       panel.classList.toggle('minimized');
       const m = panel.classList.contains('minimized');
-      $('brs-min').innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10${m?' M8 3v10':''}" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+      $('brs-min').innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10${m?'M8 3v10':''}" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+      $('brs-min').title = m ? 'Expand' : 'Minimize';
     };
 
     $('brs-close').onclick = () => {
@@ -686,11 +688,18 @@
       const r = panel.getBoundingClientRect(); sx = r.left; sy = r.top;
       panel.style.right = 'auto'; panel.style.left = sx+'px'; panel.style.top = sy+'px'; e.preventDefault();
     };
-    const onMove = e => { if (!dragging) return; panel.style.left = Math.max(0,Math.min(innerWidth-panel.offsetWidth,sx+e.clientX-dx))+'px'; panel.style.top = Math.max(0,Math.min(innerHeight-60,sy+e.clientY-dy))+'px'; };
+    const onMove = e => {
+        if (!dragging) return;
+        panel.style.left = Math.max(0,Math.min(innerWidth-panel.offsetWidth,sx+e.clientX-dx))+'px';
+        panel.style.top = Math.max(0,Math.min(innerHeight-panel.offsetHeight,sy+e.clientY-dy))+'px';
+    };
     const onUp = () => dragging = false;
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-    panel._cleanup = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+    panel._cleanup = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+    };
   }
 
   setTimeout(createUI, 800);
