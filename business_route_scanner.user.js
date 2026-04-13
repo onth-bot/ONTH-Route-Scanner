@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Business Route Scanner - Enhanced (Max Speed)
+// @name         Business Route Scanner
 // @namespace    http://tampermonkey.net/
 // @version      2.9.0
 // @description  Scan routes for business, apartment, and problem stops with a dynamic difficulty score. Optimized for absolute maximum speed.
@@ -24,15 +24,15 @@
     APT_KEYWORDS: ["APT","APT.","APT#","UNIT","UNIT#","#","PH","PENTHOUSE"],
     PROBLEM_GROUPS: [
       { label: "Foxhill Apt's",             patterns: ["941 FOXHILL DR", "979 FOXHILL DR"] },
-      { label: "Saybrook Apt's",             patterns: ["9199 N SAYBROOK", "9263 N SAYBROOK"] },
-      { label: "Nees Apt's",        patterns: ["2610 E NEES AVE"] },
-      { label: "Spruce Apt's",           patterns: ["2389 E SPRUCE AVE", "2060 E SPRUCE AVE"] },
-      { label: "Alluvial Apt's",    patterns: ["2350 E ALLUVIAL AVE"] },
-      { label: "Fort Washington Apt's", patterns: ["9525 N FORT WASHINGTON"] },
-      { label: "Shepard Apt's (The Row)",      patterns: ["2740 E SHEPARD AVE"] },
-      { label: "Primos",          patterns: ["PRIMITIVO WAY"] },
+      { label: "Saybrook Apt's",            patterns: ["9199 N SAYBROOK", "9263 N SAYBROOK"] },
+      { label: "Nees Apt's",                patterns: ["2610 E NEES AVE"] },
+      { label: "Spruce Apt's",              patterns: ["2389 E SPRUCE AVE", "2060 E SPRUCE AVE"] },
+      { label: "Alluvial Apt's",            patterns: ["2350 E ALLUVIAL AVE"] },
+      { label: "Fort Washington Apt's",     patterns: ["9525 N FORT WASHINGTON"] },
+      { label: "Shepard Apt's (The Row)",   patterns: ["2740 E SHEPARD AVE"] },
+      { label: "Primos",                    patterns: ["PRIMITIVO WAY"] },
       { label: "Coventry Apt's",            patterns: ["COVENTRY AVE"] },
-      { label: "Old Friant Rd",          patterns: ["OLD FRIANT RD"] },
+      { label: "Old Friant Rd",             patterns: ["OLD FRIANT RD"] },
       { label: "722 Clovis Apt's",          patterns: ["722 N CLOVIS AVE"] }
     ],
     STATION_EXCLUDE: ["825 NORTH CLOVIS","825 N CLOVIS","825 N. CLOVIS","825 CLOVIS"],
@@ -43,7 +43,7 @@
     DIFFICULTY: {
         FLAGGED_WEIGHT: 0.60,       // 60% from biz/apt %
         DURATION_WEIGHT: 0.20,      // 20% from route duration vs. daily average
-        DENSITY_WEIGHT: 0.5,       // 50% from stops per hour
+        DENSITY_WEIGHT: 0.5,        // 50% from stops per hour
         MULTI_TBA_WEIGHT: 0.10,     // 10% from stops with multiple packages
         PROBLEM_STOP_BONUS: 5      // 5 points for any problem stops
     }
@@ -275,43 +275,6 @@
     return false;
   }
 
-  // --- Turbo Mode ---
-  const TURBO_STYLE_ID = 'brs-turbo-styles';
-  let originalSheetStates = [];
-
-  function toggleTurboMode(enable, log) {
-    if (enable) {
-      log('Entering Turbo Mode: Disabling styles and rendering.', 'warning');
-      originalSheetStates = [];
-      for (const sheet of document.styleSheets) {
-        originalSheetStates.push({ sheet, disabled: sheet.disabled });
-        sheet.disabled = true;
-      }
-      let style = document.getElementById(TURBO_STYLE_ID);
-      if (!style) {
-        style = document.createElement('style');
-        style.id = TURBO_STYLE_ID;
-        style.textContent = `
-          body > *:not(#business-scanner-panel) {
-            visibility: hidden !important;
-            animation: none !important;
-            transition: none !important;
-          }
-        `;
-        document.head.appendChild(style);
-      }
-    } else {
-      log('Exiting Turbo Mode: Restoring styles.', 'info');
-      const style = document.getElementById(TURBO_STYLE_ID);
-      if (style) style.remove();
-      for (const state of originalSheetStates) {
-        state.sheet.disabled = state.disabled;
-      }
-      originalSheetStates = [];
-    }
-  }
-
-
   /* ── Data collection ──────────────────────────────────────────────────── */
 
   function getAllStops(log) {
@@ -385,14 +348,12 @@
 
   /* ── Main scraper ─────────────────────────────────────────────────────── */
 
-  async function runScraper(log, shouldStop, onlyRemaining, updateProgress, updateStats, turboMode) {
+  async function runScraper(log, shouldStop, onlyRemaining, updateProgress, updateStats) {
     const label = onlyRemaining ? "REMAINING" : "ALL";
     const { routes: routesMap, durations } = await getAllRoutes(log);
     const codes = [...routesMap.keys()];
 
     if (!codes.length) { log('No routes found! Make sure you are on the route list page.', 'error'); return; }
-
-    if (turboMode) toggleTurboMode(true, log);
 
     const bizData = [], aptData = [], probData = [];
     const stats = {}, stopSets = {};
@@ -502,8 +463,6 @@
       // Maximum speed yield to wait for route list render
       await waitFor(isRouteList, CONFIG.TIMEOUTS.ROUTE_LIST);
     }
-
-    if (turboMode) toggleTurboMode(false, log);
 
     updateProgress(codes.length, codes.length);
     log(`Scan complete! PriorityFlags: ${priorityFlags} | Problem stops: ${totalProb}`, 'success');
@@ -661,14 +620,6 @@
 .brs-stop-btn{flex:1;padding:8px 12px;background:rgba(24,25,29,.55);border:1px solid var(--border);border-radius:7px;color:var(--txt2);font-family:'Inter',sans-serif;font-weight:600;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;transition:all .15s}
 .brs-stop-btn:hover:not(:disabled){background:rgba(240,160,160,.1);border-color:rgba(240,160,160,.4);color:var(--err);transform:translateY(-1px)}
 .brs-stop-btn:disabled{opacity:.35;cursor:not-allowed}
-.brs-options{padding-top:4px;display:flex;align-items:center;justify-content:center;}
-.brs-switch-label{display:flex;align-items:center;cursor:pointer;gap:6px;font-size:11px;font-weight:500;color:var(--muted);transition:color .15s}.brs-switch-label:hover{color:var(--txt2)}
-.brs-switch{position:relative;display:inline-block;width:26px;height:15px}
-.brs-switch input{opacity:0;width:0;height:0}
-.brs-slider{position:absolute;cursor:pointer;inset:0;background-color:rgba(245,197,24,.18);border-radius:99px;transition:.3s}
-.brs-slider:before{position:absolute;content:"";height:11px;width:11px;left:2px;bottom:2px;background-color:var(--txt2);border-radius:50%;transition:.3s}
-input:checked+.brs-slider{background-color:var(--gold)}
-input:checked+.brs-slider:before{transform:translateX(11px);background-color:var(--bg)}
 .brs-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:8px 14px 12px}
 .brs-stat{background:rgba(24,25,29,.45);border:1px solid rgba(42,44,49,.85);border-radius:8px;padding:10px 6px;text-align:center;transition:all .15s}
 .brs-stat:hover{background:rgba(24,25,29,.62);border-color:rgba(245,197,24,.22);transform:translateY(-1px);box-shadow:0 10px 24px rgba(0,0,0,.35)}
@@ -716,16 +667,6 @@ input:checked+.brs-slider:before{transform:translateX(11px);background-color:var
   <div style="display:flex;gap:8px">
     <button id="brs-stop" class="brs-stop-btn" disabled><span>◼</span><span>Stop Scan</span></button>
   </div>
-  <div class="brs-options">
-      <label class="brs-switch-label" for="brs-turbo" title="Disables all rendering during scan for maximum speed. The page will go blank.">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg>
-        <span>Turbo Mode</span>
-        <label class="brs-switch">
-          <input type="checkbox" id="brs-turbo" checked>
-          <span class="brs-slider"></span>
-        </label>
-      </label>
-  </div>
 </div>
 <div class="brs-stats">
   <div class="brs-stat business"><div class="brs-sv" id="s-biz">0</div><div class="brs-sl">Business</div></div>
@@ -748,7 +689,6 @@ input:checked+.brs-slider:before{transform:translateX(11px);background-color:var
     const scanAll = $('brs-scan-all'), scanRem = $('brs-scan-rem'), stopBtn = $('brs-stop');
     const logEl = $('brs-log'), dot = $('brs-dot'), stxt = $('brs-stxt'), mode = $('brs-mode');
     const psec = $('brs-psec'), pfill = $('brs-pfill'), ptxt = $('brs-ptxt');
-    const turboCheck = $('brs-turbo');
 
     const setStatus = (s, t, m) => { dot.className = 'brs-si ' + s; stxt.textContent = t; mode.textContent = m; };
 
@@ -779,16 +719,14 @@ input:checked+.brs-slider:before{transform:translateX(11px);background-color:var
       if (running) return;
       running = true; state.stopRequested = false;
       scanAll.disabled = scanRem.disabled = true; stopBtn.disabled = false;
-      const useTurbo = turboCheck.checked;
       setStatus('running', 'Scanning in progress...', remaining ? 'Remaining' : 'Full Scan');
       addLog(remaining ? 'Starting remaining stops scan...' : 'Starting full route scan...');
       updateStats(0,0,0,0);
       try {
-        await runScraper(addLog, () => state.stopRequested, remaining, setProgress, updateStats, useTurbo);
+        await runScraper(addLog, () => state.stopRequested, remaining, setProgress, updateStats);
       } catch (e) {
         addLog(`Error: ${e.message}`, 'error'); console.error('Scanner error:', e); setStatus('error','Scan failed','Error');
       } finally {
-        if (useTurbo) toggleTurboMode(false, addLog);
         running = false;
         scanAll.disabled = scanRem.disabled = false;
         stopBtn.disabled = true;
