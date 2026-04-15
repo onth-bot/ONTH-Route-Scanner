@@ -23,18 +23,18 @@
     ],
     APT_KEYWORDS: ["APT","APT.","APT#","UNIT","UNIT#","#","PH","PENTHOUSE"],
     PROBLEM_GROUPS: [
-      { label: "Foxhill Apt's",             patterns: ["941 FOXHILL DR", "979 FOXHILL DR"], points: 20 },
+      { label: "Foxhill Apt's",             patterns: ["941 FOXHILL DR", "979 FOXHILL DR"], points: 10 },
       { label: "Copper And Friant Apt's",   patterns: ["COPPER AND FRIANT", "11217 N ALICANTE DR", "11201 N ALICANTE DR"], points: 20 },
       { label: "Saybrook Apt's",            patterns: ["9199 N SAYBROOK", "9263 N SAYBROOK"], points: 10 },
       { label: "Nees Apt's",                patterns: ["2610 E NEES AVE"], points: 10 },
       { label: "Spruce Apt's",              patterns: ["2389 E SPRUCE AVE", "2060 E SPRUCE AVE"], points: 10 },
-      { label: "Alluvial Apt's",            patterns: ["2350 E ALLUVIAL AVE"], points: 10 },
-      { label: "Fort Washington Apt's",     patterns: ["9525 N FORT WASHINGTON"], points: 15 },
+      { label: "Alluvial Apt's",            patterns: ["2350 E ALLUVIAL AVE"], points: 5 },
+      { label: "Fort Washington Apt's",     patterns: ["9525 N FORT WASHINGTON"], points: 10 },
       { label: "Shepard Apt's (The Row)",   patterns: ["2740 E SHEPARD AVE"], points: 10 },
       { label: "Primos",                    patterns: ["PRIMITIVO WAY"], points: 20 },
       { label: "Coventry Apt's",            patterns: ["COVENTRY AVE"], points: 10 },
       { label: "Old Friant Rd",             patterns: ["OLD FRIANT RD"], points: 5 },
-      { label: "722 Clovis Apt's",          patterns: ["722 N CLOVIS AVE"], points: 15 }
+      { label: "722 Clovis Apt's",          patterns: ["722 N CLOVIS AVE"], points: 10 }
     ],
     STATION_EXCLUDE: ["825 NORTH CLOVIS","825 N CLOVIS","825 N. CLOVIS","825 CLOVIS"],
     TIMEOUTS: { ROUTE_LOAD: 8000, ROUTE_LIST: 5000, SCROLL_DELAY: 40, CLICK_DELAY: 0, POLL_INTERVAL: 0 },
@@ -43,8 +43,8 @@
     MAX_LOG_ENTRIES: 100,
     DIFFICULTY: {
         FLAGGED_WEIGHT: 0.50,       // 60% from biz/apt %
-        DURATION_WEIGHT: 0.30,      // 20% from route duration vs. daily average
-        MULTI_TBA_WEIGHT: 0.20      // 20% from stops with multiple packages (Increased since density was removed)
+        DURATION_WEIGHT: 0.40,      // 20% from route duration vs. daily average
+        MULTI_TBA_WEIGHT: 0.10      // 20% from stops with multiple packages (Increased since density was removed)
     }
   };
 
