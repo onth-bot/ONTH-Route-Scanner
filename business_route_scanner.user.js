@@ -76,7 +76,7 @@
     let durationScore = 0;
     if (duration > 0 && dailyAvgDuration > 0) {
       const durationRatio = duration / dailyAvgDuration;
-      durationScore = Math.max(0, Math.min((durationRatio - 0.8) / 0.4, 1)) * C.DURATION_WEIGHT * 100;
+      durationScore = Math.max(0, Math.min((durationRatio - 0.8) / 0.5, 1)) * C.DURATION_WEIGHT * 100;
     }
 
     // 3. Multi-TBA Stops Score
